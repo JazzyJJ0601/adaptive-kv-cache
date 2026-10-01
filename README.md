@@ -15,7 +15,7 @@ We implement adaptive bit-width KV cache quantization that assigns different pre
 - **Per-head quantization**: Each KV head gets its own bit-width allocation
 - **Variance-based allocation**: Running variance of key projections determines precision needs
 - **Zero calibration overhead**: Statistics computed online during generation
-- **Memory savings**: Reduces KV cache size by 2–4× with negligible perplexity loss
+- **Memory savings (target, not yet measured)**: 2–4× smaller KV cache
 
 ### Diagram Description
 
@@ -116,3 +116,9 @@ For detailed algorithm description, see `methodology.md`. The reference implemen
 5. Open a Pull Request.
 
 Please ensure your code passes existing tests and follows the project's style guidelines.
+
+## Results
+
+**Measured status:** Generation time measured on Qwen3-8B (0.87s baseline vs 0.70s adaptive, 3 prompts). The KV-cache size figures are estimates, not measurements, and perplexity under adaptive quantisation has not been measured yet.
+
+See [RESULTS.md](RESULTS.md)
