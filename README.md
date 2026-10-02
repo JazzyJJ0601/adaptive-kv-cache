@@ -8,9 +8,10 @@ Measured on **Qwen3-8B** (WikiText-2 test, 40 × 512 tokens, bf16 = 12.03):
 - **With a simple per-token quantiser, the allocation is a large win.** At 3.5 bits the calibrated
   allocation gives **18.79** perplexity against **54.7** for random heads at the same budget, and it beats
   *uniform 4-bit* (19.85) while using 12% less cache.
-- **With a strong quantiser (KIVI-style per-channel keys) it does not help yet.** Everything is already
-  close to bf16 (uniform 3-bit 12.34), and the calibrated allocation only ties a random split of
-  neighbouring bit-widths (12.25 vs 12.18 at 3.5 bits). Written up below, not hidden.
+- **With a strong quantiser (KIVI-style per-channel keys) it still wins, by less.** Everything is
+  already close to bf16, so the margins are small: at 3 bits the calibrated allocation gives **12.17**
+  against 12.34 for uniform 3-bit, and at 2.5 bits **12.48** against 13.16 for random heads. The first
+  calibrated version only tied here; why, and the fix, are below.
 
 ## Method
 
@@ -63,18 +64,27 @@ lower perplexity than the random mean at 2.5 and 3 bits, and 2–6× lower than 
 |---|---:|---:|
 | Uniform 2-bit | 2.0 | 15.64 |
 | Random, 2/3 split (3 seeds) | 2.5 | 13.28 / 12.98 / 13.21 (mean 13.16) |
-| Calibrated (ours) | 2.5 | 13.20 |
+| Random, 2/4 split (3 seeds) | 2.5 | 13.67 / 13.49 / 14.17 (mean 13.78) |
+| Calibrated v2 | 2.5 | 13.20 |
+| **Calibrated v3 (ours)** | 2.5 | **12.48** |
 | Uniform 3-bit | 3.0 | 12.34 |
-| Calibrated (ours) | 3.0 | 12.31 |
+| Random, 2/4 split (3 seeds) | 3.0 | 12.98 / 12.86 / 12.94 (mean 12.93) |
+| Calibrated v2 | 3.0 | 12.31 |
+| **Calibrated v3 (ours)** | 3.0 | **12.17** |
 | Random, 3/4 split (3 seeds) | 3.5 | 12.20 / 12.17 / 12.18 (mean 12.18) |
-| Calibrated (ours) | 3.5 | 12.25 |
+| Calibrated v2 | 3.5 | 12.25 |
+| **Calibrated v3 (ours)** | 3.5 | **12.10** |
 | Uniform 4-bit | 4.0 | 12.06 |
 
-A tie at 2.5 and 3 bits, a small loss at 3.5. Why: once keys are quantised per channel, putting a whole
-layer's K or V at 2 bits moves calibration loss by at most 0.02 nats, and many layers measure as
-slightly *negative*. The loss probe is then at its noise floor (8 × 512 tokens), and the greedy also
-spends budget on 8-bit upgrades that buy almost nothing. A v3 run (no 8-bit choice, 4× more probe
-data) is in progress; this section will be updated with its result either way.
+v3 beats every random seed at every budget and beats uniform 3-bit at the same size. The gaps are
+small because this quantiser is already good: at 3.5 bits it is 0.06 above bf16 and 0.04 above uniform
+4-bit, which uses 12% more cache (41.6 vs 37.1 KB/token).
+
+**Why v2 only tied here.** Once keys are quantised per channel, putting a whole layer's K or V at 2 bits
+moves calibration loss by at most 0.02 nats, and many layers measured as slightly *negative*. The loss
+probe (8 × 512 tokens) was at its noise floor, and the greedy also spent budget on 8-bit upgrades that
+bought almost nothing. **v3** drops the 8-bit choice (bits ∈ {2, 3, 4}) and runs the loss probe on
+4× more data (32 × 512 train tokens). Same eval set, same budgets.
 
 ## What failed first
 
@@ -93,6 +103,7 @@ withdrawn: the quantiser had never been wired into the model.
 python results/run_real.py token            # -> results/real.json
 python results/run_real.py channel          # -> results/real_channel.json
 python results/run_real.py token adjacent   # adds the random 2/3 and 3/4 baselines
+python results/run_real.py channel v3       # -> results/real_channel_v3.json
 python -m pytest -q tests
 ```
 

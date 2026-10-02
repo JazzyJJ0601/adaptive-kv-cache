@@ -3,15 +3,16 @@
 All numbers: Qwen3-8B, bf16 weights, WikiText-2 test 40 × 512 tokens (20,440 scored tokens),
 calibration on WikiText-2 train 8 × 512. bf16 perplexity 12.0346. Raw rows, per-layer loss probes and
 every allocation are in [`results/real.json`](results/real.json) (per-token keys) and
-[`results/real_channel.json`](results/real_channel.json) (KIVI-style keys).
+[`results/real_channel.json`](results/real_channel.json) (KIVI-style keys, v2) and
+[`results/real_channel_v3.json`](results/real_channel_v3.json) (KIVI-style keys, v3).
 
 ## Summary at equal memory
 
-| Avg bits | Per-token: best random mean | Per-token: calibrated | KIVI: best random/uniform | KIVI: calibrated |
+| Avg bits | Per-token: best random mean | Per-token: calibrated | KIVI: best random/uniform | KIVI: calibrated v3 |
 |---:|---:|---:|---:|---:|
-| 2.5 | 574 | **72.4** | 13.16 | 13.20 |
-| 3.0 | 246 (uniform 333) | **28.3** | 12.34 (uniform) | 12.31 |
-| 3.5 | 43.0 | **18.8** | 12.18 | 12.25 |
+| 2.5 | 574 | **72.4** | 13.16 | **12.48** |
+| 3.0 | 246 (uniform 333) | **28.3** | 12.34 (uniform) | **12.17** |
+| 3.5 | 43.0 | **18.8** | 12.18 | **12.10** |
 
 ## Per-layer loss probe (calibration loss rise, nats, when one layer's K or V is 2-bit)
 
@@ -26,11 +27,14 @@ every allocation are in [`results/real.json`](results/real.json) (per-token keys
 |---|---:|---:|
 | calibrated-local (v1, failed) | 4.03 | 2.97 |
 | calibrated, per-token keys | 4.35 | 2.65 |
-| calibrated, KIVI keys | 3.56 | 3.44 |
+| calibrated v2, KIVI keys | 3.56 | 3.44 |
+| calibrated v3, KIVI keys | 3.39 | 3.62 |
 
 ## Version history
 
 - v1 (calibrated on raw attention-output error): 491 / 382 / 250 at 2.5 / 3 / 3.5 bits, per-token mode.
   Lost to random. Diagnosis in the README.
-- v2 (loss-calibrated): numbers above.
-- v3 (no 8-bit choice, 32 × 512 probe): running.
+- v2 (loss-calibrated, bits {2,3,4,8}, 8 × 512 probe): per-token numbers above; KIVI 13.20 / 12.31 /
+  12.25, a tie with random.
+- v3 (bits {2,3,4}, 32 × 512 loss probe), KIVI keys: 12.48 / 12.17 / 12.10, beats every random seed
+  and uniform 3-bit. A per-token v3 run follows; it will be added here when done.
