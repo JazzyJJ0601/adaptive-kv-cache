@@ -119,6 +119,6 @@ Please ensure your code passes existing tests and follows the project's style gu
 
 ## Results
 
-**Measured status:** Generation time measured on Qwen3-8B (0.87s baseline vs 0.70s adaptive, 3 prompts). The KV-cache size figures are estimates, not measurements, and perplexity under adaptive quantisation has not been measured yet.
+**Measured status:** Not measured yet; earlier timing numbers were withdrawn (see RESULTS.md).
 
 See [RESULTS.md](RESULTS.md)

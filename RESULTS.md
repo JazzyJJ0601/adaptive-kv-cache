@@ -1,13 +1,10 @@
-# Adaptive KV Cache Real Results
+# Adaptive KV Cache: Real Results
 
-**Status:** Generation time measured on Qwen3-8B (0.87s baseline vs 0.70s adaptive, 3 prompts). The KV-cache size figures are estimates, not measurements, and perplexity under adaptive quantisation has not been measured yet.
+**Status:** Not measured yet. An earlier version of this file reported a generation-time
+difference (0.87s vs 0.70s) and a KV-cache size estimate. On review, both runs used the
+same unmodified model (the adaptive quantiser was never wired in), so the timing gap was
+warm-up noise and the size figure was the whole model's GPU memory, not the cache. Those
+numbers have been withdrawn.
 
-Command: python3 repos/adaptive-kv-cache/results/run_real.py
-
-| Metric | Baseline | Adaptive |
-|--------|----------|----------|
-| Avg Generation Time (3 prompts) | 0.868s | 0.702s |
-| Peak GPU Memory | 15630.7 MB | 15630.7 MB |
-| Estimated KV Cache Size | 15630.7 MB | 5210.2 MB |
-
-The baseline uses full FP16 KV cache during generation. The adaptive method applies per-head quantization (2-8 bits) based on attention variance, which can reduce KV cache memory by approximately 60-70% in practice. Both methods generate text with similar latency since the adaptive quantization overhead is minimal for short sequences.
+Next: wire the per-head adaptive KV quantiser into Qwen3-8B's attention and measure
+perplexity and real cache memory against a uniform-bit KV cache at the same size.
