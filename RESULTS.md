@@ -4,7 +4,8 @@ All numbers: Qwen3-8B, bf16 weights, WikiText-2 test 40 × 512 tokens (20,440 sc
 calibration on WikiText-2 train 8 × 512. bf16 perplexity 12.0346. Raw rows, per-layer loss probes and
 every allocation are in [`results/real.json`](results/real.json) (per-token keys) and
 [`results/real_channel.json`](results/real_channel.json) (KIVI-style keys, v2) and
-[`results/real_channel_v3.json`](results/real_channel_v3.json) (KIVI-style keys, v3).
+[`results/real_channel_v3.json`](results/real_channel_v3.json) (KIVI-style keys, v3) and
+[`results/real_v3.json`](results/real_v3.json) (per-token keys, v3 settings).
 
 ## Summary at equal memory
 
@@ -37,4 +38,8 @@ every allocation are in [`results/real.json`](results/real.json) (per-token keys
 - v2 (loss-calibrated, bits {2,3,4,8}, 8 × 512 probe): per-token numbers above; KIVI 13.20 / 12.31 /
   12.25, a tie with random.
 - v3 (bits {2,3,4}, 32 × 512 loss probe), KIVI keys: 12.48 / 12.17 / 12.10, beats every random seed
-  and uniform 3-bit. A per-token v3 run follows; it will be added here when done.
+  and uniform 3-bit.
+- v3 settings on per-token keys ([`results/real_v3.json`](results/real_v3.json)): 94.7 / 36.2 / 32.5,
+  worse than v2 (72.4 / 28.3 / 18.8) though still far ahead of random. In this mode layer 0's outlier
+  keys need the 8-bit option that v3 removes, so the per-token headline stays on v2 (bits {2,3,4,8}).
+  The best setting depends on the quantiser: keep 8-bit for per-token keys, drop it for KIVI keys.
