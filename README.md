@@ -1,124 +1,106 @@
 # Adaptive KV Cache
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXX)
+Per-head bit-widths for a quantised KV cache. Every (layer, KV head, K or V) gets its own number of
+bits under a fixed memory budget; a loss-calibrated score decides who gets the extra bits.
 
-## Problem Statement
+Measured on **Qwen3-8B** (WikiText-2 test, 40 × 512 tokens, bf16 = 12.03):
 
-Large language models require substantial memory to store key-value (KV) caches during autoregressive generation. For models like Qwen3-8B with hundreds of attention heads, the KV cache can dominate memory usage during long-context inference, limiting batch sizes and sequence lengths on consumer GPUs.
+- **With a simple per-token quantiser, the allocation is a large win.** At 3.5 bits the calibrated
+  allocation gives **18.79** perplexity against **54.7** for random heads at the same budget, and it beats
+  *uniform 4-bit* (19.85) while using 12% less cache.
+- **With a strong quantiser (KIVI-style per-channel keys) it does not help yet.** Everything is already
+  close to bf16 (uniform 3-bit 12.34), and the calibrated allocation only ties a random split of
+  neighbouring bit-widths (12.25 vs 12.18 at 3.5 bits). Written up below, not hidden.
 
-## Approach Overview
+## Method
 
-We implement adaptive bit-width KV cache quantization that assigns different precision levels (2–8 bits) to each attention head based on its attention variance. Key innovations:
+A unit is one (layer, KV head, K or V): Qwen3-8B has 36 × 8 × 2 = 576 units. Post-RoPE keys and values
+(exactly what the cache stores) are fake-quantised inside a custom attention function registered with
+`transformers.AttentionInterface`, so the model's own forward pass sees the quantised cache.
 
-- **Per-head quantization**: Each KV head gets its own bit-width allocation
-- **Variance-based allocation**: Running variance of key projections determines precision needs
-- **Zero calibration overhead**: Statistics computed online during generation
-- **Memory savings (target, not yet measured)**: 2–4× smaller KV cache
+1. **Local error.** On 8 × 512 tokens of WikiText-2 *train*, for each unit and each choice of
+   {2, 3, 4, 8} bits, measure the squared error of that head's attention output when only that unit is
+   quantised.
+2. **Loss probe.** For each layer, measure the calibration loss rise when that layer's K (or V) goes to
+   2 bits. This converts local error into loss: each head's error is rescaled so its layer's heads add up
+   to the measured loss rise.
+3. **Greedy allocation.** Start every unit at 2 bits and repeatedly buy the upgrade with the largest loss
+   reduction per extra bit until the budget is spent.
 
-### Diagram Description
-
-```text
-[Attention Layer] --> [KV Extractor] --> [Entropy Score] --> [Compression Policy]
-                                              |
-                                              v
-                                       [Quantizer (INT8/INT4)] --> [Compressed KV] --> [Attention Output]
-```
-
-The system operates online during generation, updating compression policies every N tokens to avoid stale statistics.
-
-## Installation
-
-```bash
-pip install adaptive-kv-cache
-```
-
-Or for development:
-
-```bash
-git clone https://github.com/<your-username>/adaptive-kv-cache.git
-cd adaptive-kv-cache
-pip install -e .
-```
-
-## Quickstart
-
-### Load Model and Capture KV Cache
-
-```python
-from adaptive_kv_cache import CacheMonitor, quantize_kv
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-
-model_name = "meta-llama/Llama-2-7b"
-model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-monitor = CacheMonitor(model)
-input_ids = tokenizer("The adaptive KV cache", return_tensors="pt").input_ids.cuda()
-
-# Run forward pass and capture KV
-output = model(input_ids, use_cache=True)
-kv_states = monitor.get_kv_states()
-```
-
-### Quantize KV States
-
-```python
-compressed_kv = quantize_kv(kv_states, precision="int8", strategy="adaptive")
-```
-
-## Local Setup (Qwen3-8B)
-
-```bash
-# Install dependencies
-pip install torch numpy pytest
-
-# Clone model weights (requires huggingface-cli)
-huggingface-cli download Qwen/Qwen3-8B --local-dir qwen3-8b
-
-# Run benchmark
-python benchmark.py --model qwen3-8b --max-seq 4096
-```
-
-For detailed algorithm description, see `methodology.md`. The reference implementation is in `adaptive_kv_cache.py`.
+Step 2 is the fix for the first version, which allocated on raw local error and lost to random (see
+[What failed first](#what-failed-first)).
 
 ## Results
 
-| Configuration | Context Length | Memory Usage (GB) | Perplexity Delta |
-|---------------|----------------|-------------------|------------------|
-| Baseline (FP16) | 4096 | 18.5 | 0.0 |
-| Adaptive INT8 | 4096 | 10.2 | +0.02 |
-| Adaptive INT4 | 4096 | 6.8 | +0.08 |
+Packed cache per token includes a fp16 scale + zero-point per group. bf16 cache = 144 KB/token.
 
-*Table placeholder: Replace with empirical benchmark data.*
+### Per-token keys and values (simple quantiser)
 
-## Citation
+| Allocation | Avg bits | KB/token | Perplexity |
+|---|---:|---:|---:|
+| Uniform 2-bit | 2.0 | 20.25 | 1046 |
+| Random, 2/3 split (3 seeds) | 2.5 | 24.75 | 752 / 607 / 653 (mean 671) |
+| Random, 2/4 split (3 seeds) | 2.5 | 24.75 | 620 / 606 / 495 (mean 574) |
+| Variance heuristic (repo's original idea) | 2.5 | 24.75 | 439 |
+| **Calibrated (ours)** | 2.5 | 24.75 | **72.4** |
+| Uniform 3-bit | 3.0 | 29.25 | 333 |
+| Random, 2/4 split (3 seeds) | 3.0 | 29.25 | 355 / 205 / 180 (mean 246) |
+| Variance heuristic | 3.0 | 29.25 | 94.9 |
+| **Calibrated (ours)** | 3.0 | 29.25 | **28.3** |
+| Random, 3/4 split (3 seeds) | 3.5 | 33.75 | 76.1 / 42.5 / 45.3 (mean 54.7) |
+| Random, 2/4 split (3 seeds) | 3.5 | 33.75 | 45.7 / 49.3 / 33.8 (mean 43.0) |
+| Variance heuristic | 3.5 | 33.75 | 41.9 |
+| **Calibrated (ours)** | 3.5 | 33.75 | **18.8** |
+| Uniform 4-bit | 4.0 | 38.25 | 19.85 |
+| Uniform 8-bit | 8.0 | 74.25 | 12.04 |
 
-```bibtex
-@misc{adaptivekv2025,
-      title={Adaptive KV Cache Compression for Long-Context LLM Inference}, 
-      author={Jasper and Contributors},
-      year={2025},
-      eprint={2501.XXXXXXX},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
-}
+The calibrated allocation beats every random seed and the variance heuristic at every budget: about 8×
+lower perplexity than the random mean at 2.5 and 3 bits, and 2–6× lower than the variance heuristic.
+
+### KIVI-style keys (per-channel over 32-token groups), per-token values
+
+| Allocation | Avg bits | Perplexity |
+|---|---:|---:|
+| Uniform 2-bit | 2.0 | 15.64 |
+| Random, 2/3 split (3 seeds) | 2.5 | 13.28 / 12.98 / 13.21 (mean 13.16) |
+| Calibrated (ours) | 2.5 | 13.20 |
+| Uniform 3-bit | 3.0 | 12.34 |
+| Calibrated (ours) | 3.0 | 12.31 |
+| Random, 3/4 split (3 seeds) | 3.5 | 12.20 / 12.17 / 12.18 (mean 12.18) |
+| Calibrated (ours) | 3.5 | 12.25 |
+| Uniform 4-bit | 4.0 | 12.06 |
+
+A tie at 2.5 and 3 bits, a small loss at 3.5. Why: once keys are quantised per channel, putting a whole
+layer's K or V at 2 bits moves calibration loss by at most 0.02 nats, and many layers measure as
+slightly *negative*. The loss probe is then at its noise floor (8 × 512 tokens), and the greedy also
+spends budget on 8-bit upgrades that buy almost nothing. A v3 run (no 8-bit choice, 4× more probe
+data) is in progress; this section will be updated with its result either way.
+
+## What failed first
+
+Version 1 allocated on raw attention-output error. It lost to random heads (250 vs 43 at 3.5 bits,
+per-token mode). Late layers have much larger activations, so their heads got 8 bits while layers 0–5
+were left at 2 bits, but early-layer error propagates through the whole network. Measuring each layer's
+real loss rise (step 2) fixed it: the same budget went from 250 to 18.8.
+
+The original repo described an online variance-based scheme with no measurements; the variance heuristic
+row above is that idea measured honestly. Earlier generation-time and memory numbers in this repo were
+withdrawn: the quantiser had never been wired into the model.
+
+## Reproduce
+
+```bash
+python results/run_real.py token            # -> results/real.json
+python results/run_real.py channel          # -> results/real_channel.json
+python results/run_real.py token adjacent   # adds the random 2/3 and 3/4 baselines
+python -m pytest -q tests
 ```
 
-## Contribution Guide
+Needs a GPU with ~20 GB (Qwen3-8B in bf16); the model path is set in `results/qcommon.py`.
 
-1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/amazing-feature`).
-3. Commit your changes (`git commit -m 'Add some amazing feature'`).
-4. Push to the branch (`git push origin feature/amazing-feature`).
-5. Open a Pull Request.
+## Honest limits
 
-Please ensure your code passes existing tests and follows the project's style guidelines.
-
-## Results
-
-**Measured status:** Not measured yet; earlier timing numbers were withdrawn (see RESULTS.md).
-
-See [RESULTS.md](RESULTS.md)
+- Fake quantisation: perplexity is exact for the stated format, but there is no packed mixed-bit
+  kernel, so no speed numbers. KB/token is computed, not measured.
+- 512-token windows. Long-context behaviour is not tested.
+- One model, one dataset.
